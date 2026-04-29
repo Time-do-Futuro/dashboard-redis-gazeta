@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Redis Stream Dashboard</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="layout">
+      <section class="hero">
+        <div>
+          <p class="eyebrow">Redis Stream Dashboard</p>
+          <h1>Mensagens em tempo quase real direto do Redis</h1>
+          <p class="subtitle">
+            Painel simples para acompanhar eventos, volume e últimas mensagens
+            publicadas no stream.
+          </p>
+        </div>
+
+        <button id="publish-demo" class="primary-button">
+          Publicar mensagem de teste
+        </button>
+      </section>
+
+      <section class="cards">
+        <article class="card">
+          <span class="label">Status</span>
+          <strong id="status-value">Carregando...</strong>
+        </article>
+        <article class="card">
+          <span class="label">Stream</span>
+          <strong id="stream-key">-</strong>
+        </article>
+        <article class="card">
+          <span class="label">Itens no stream</span>
+          <strong id="stream-length">0</strong>
+        </article>
+        <article class="card">
+          <span class="label">Último ID</span>
+          <strong id="last-message-id">-</strong>
+        </article>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <h2>Eventos por tipo</h2>
+            <p>Resumo das mensagens visíveis no dashboard</p>
+          </div>
+          <span id="last-refresh" class="refresh-chip">Atualizando...</span>
+        </div>
+        <div id="event-tags" class="tag-list"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <h2>Últimas mensagens</h2>
+            <p>Atualização automática a cada 5 segundos</p>
+          </div>
+        </div>
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Evento</th>
+                <th>Origem</th>
+                <th>Data</th>
+                <th>Payload</th>
+              </tr>
+            </thead>
+            <tbody id="messages-body">
+              <tr>
+                <td colspan="5">Carregando mensagens...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      const statusValue = document.getElementById("status-value");
+      const streamKey = document.getElementById("stream-key");
+      const streamLength = document.getElementById("stream-length");
+      const lastMessageId = document.getElementById("last-message-id");
+      const eventTags = document.getElementById("event-tags");
+      const messagesBody = document.getElementById("messages-body");
+      const lastRefresh = document.getElementById("last-refresh");
+      const publishButton = document.getElementById("publish-demo");
+
+      function formatDate(dateValue) {
+        if (!dateValue) return "-";
+        const date = new Date(dateValue);
+        if (Number.isNaN(date.getTime())) return dateValue;
+        return date.toLocaleString("pt-BR");
+      }
+
+      function truncate(value, maxLength = 90) {
+        if (!value) return "-";
+        return value.length > maxLength
+          ? value.slice(0, maxLength) + "..."
+          : value;
+      }
+
+      async function loadHealth() {
+        const response = await fetch("/api/health");
+        const data = await response.json();
+        statusValue.textContent = data.status;
+        streamKey.textContent = data.streamKey;
+      }
+
+      async function loadStats() {
+        const response = await fetch("/api/stats");
+        const data = await response.json();
+
+        streamLength.textContent = data.streamLength;
+        lastMessageId.textContent = data.lastMessageId || "-";
+
+        const items = Object.entries(data.eventsByType);
+        eventTags.innerHTML = items.length
+          ? items
+              .map(
+                ([name, count]) =>
+                  `<span class="tag">${name}<strong>${count}</strong></span>`
+              )
+              .join("")
+          : '<span class="tag empty">Nenhum evento carregado</span>';
+      }
+
+      async function loadMessages() {
+        const response = await fetch("/api/messages?limit=50");
+        const data = await response.json();
+
+        messagesBody.innerHTML = data.messages.length
+          ? data.messages
+              .map(
+                (message) => `
+                  <tr>
+                    <td>${message.id}</td>
+                    <td>${message.event}</td>
+                    <td>${message.source}</td>
+                    <td>${formatDate(message.createdAt)}</td>
+                    <td title="${message.payload.replace(/"/g, "&quot;")}">${truncate(message.payload)}</td>
+                  </tr>
+                `
+              )
+              .join("")
+          : '<tr><td colspan="5">Nenhuma mensagem encontrada no stream.</td></tr>';
+      }
+
+      async function refresh() {
+        try {
+          await Promise.all([loadHealth(), loadStats(), loadMessages()]);
+          lastRefresh.textContent =
+            "Atualizado em " + new Date().toLocaleTimeString("pt-BR");
+        } catch (error) {
+          statusValue.textContent = "error";
+          lastRefresh.textContent = "Falha ao atualizar";
+          console.error(error);
+        }
+      }
+
+      publishButton.addEventListener("click", async () => {
+        publishButton.disabled = true;
+        publishButton.textContent = "Publicando...";
+
+        try {
+          await fetch("/api/publish-demo", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({})
+          });
+          await refresh();
+        } finally {
+          publishButton.disabled = false;
+          publishButton.textContent = "Publicar mensagem de teste";
+        }
+      });
+
+      refresh();
+      setInterval(refresh, 5000);
+    </script>
+  </body>
+</html>
