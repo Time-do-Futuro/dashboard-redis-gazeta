@@ -7,187 +7,154 @@ const { createClient } = require("redis");
 const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || "0.0.0.0";
 const REDIS_URL = process.env.REDIS_URL || "redis://127.0.0.1:6379";
-const STREAM_KEY = process.env.REDIS_STREAM_KEY || "messages:events";
-const MAX_RESULTS = Number(process.env.REDIS_DASHBOARD_LIMIT || 50);
 const PUBLIC_DIR = path.join(__dirname, "public");
 
 const redis = createClient({ url: REDIS_URL });
+redis.on("error", (err) => console.error("Redis error:", err.message));
 
-redis.on("error", (error) => {
-  console.error("Redis error:", error.message);
-});
-
-function sendJson(response, statusCode, payload) {
-  response.writeHead(statusCode, {
+function sendJson(res, status, payload) {
+  res.writeHead(status, {
     "Content-Type": "application/json; charset=utf-8",
     "Cache-Control": "no-store"
   });
-  response.end(JSON.stringify(payload));
+  res.end(JSON.stringify(payload));
 }
 
-function sendFile(response, filePath) {
+function sendFile(res, filePath) {
   const ext = path.extname(filePath).toLowerCase();
-  const typeMap = {
+  const types = {
     ".html": "text/html; charset=utf-8",
     ".css": "text/css; charset=utf-8",
-    ".js": "application/javascript; charset=utf-8",
-    ".json": "application/json; charset=utf-8"
+    ".js": "application/javascript; charset=utf-8"
   };
-
-  fs.readFile(filePath, (error, content) => {
-    if (error) {
-      sendJson(response, 404, { error: "File not found" });
-      return;
-    }
-
-    response.writeHead(200, {
-      "Content-Type": typeMap[ext] || "text/plain; charset=utf-8"
-    });
-    response.end(content);
+  fs.readFile(filePath, (err, content) => {
+    if (err) { sendJson(res, 404, { error: "not found" }); return; }
+    res.writeHead(200, { "Content-Type": types[ext] || "text/plain; charset=utf-8" });
+    res.end(content);
   });
 }
 
-function normalizeEntry(entry) {
-  const fields = entry.message || {};
+function serveStatic(pathname, res) {
+  const norm = pathname === "/" ? "index.html" : pathname.replace(/^\/+/, "");
+  const filePath = path.join(PUBLIC_DIR, norm);
+  if (!filePath.startsWith(PUBLIC_DIR)) { sendJson(res, 403, { error: "forbidden" }); return; }
+  sendFile(res, filePath);
+}
+
+// Extrai o nome do canal de uma chave "chat:{canal}:{uuid}"
+// O canal pode conter ":" no nome, por isso pega tudo exceto o último segmento
+function parseKey(key) {
+  const withoutPrefix = key.replace(/^chat:/, "");
+  const lastColon = withoutPrefix.lastIndexOf(":");
+  if (lastColon === -1) return { channel: withoutPrefix, id: "" };
   return {
-    id: entry.id,
-    event: fields.event || fields.type || "unknown",
-    source: fields.source || "n/a",
-    payload: fields.payload || fields.message || JSON.stringify(fields),
-    createdAt: fields.createdAt || fields.timestamp || null,
-    raw: fields
+    channel: withoutPrefix.slice(0, lastColon),
+    id: withoutPrefix.slice(lastColon + 1)
   };
 }
 
-async function readMessages(limit) {
-  const count = Math.max(1, Math.min(limit || MAX_RESULTS, 200));
-  const entries = await redis.xRevRange(STREAM_KEY, "+", "-", { COUNT: count });
-  return entries.map(normalizeEntry);
-}
-
-async function readStats(messages) {
-  const streamLength = await redis.xLen(STREAM_KEY).catch(() => 0);
-  const lastMessage = messages[0] || null;
-  const eventsByType = messages.reduce((accumulator, item) => {
-    accumulator[item.event] = (accumulator[item.event] || 0) + 1;
-    return accumulator;
-  }, {});
-
-  return {
-    streamKey: STREAM_KEY,
-    streamLength,
-    lastMessageId: lastMessage ? lastMessage.id : null,
-    visibleMessages: messages.length,
-    eventsByType
-  };
-}
-
-function serveStatic(requestPath, response) {
-  const normalizedPath = requestPath === "/" ? "index.html" : requestPath.replace(/^\/+/, "");
-  const filePath = path.join(PUBLIC_DIR, normalizedPath);
-
-  if (!filePath.startsWith(PUBLIC_DIR)) {
-    sendJson(response, 403, { error: "Forbidden" });
-    return;
+async function scanAllChatKeys() {
+  const keys = [];
+  for await (const key of redis.scanIterator({ MATCH: "chat:*", COUNT: 100 })) {
+    keys.push(key);
   }
-
-  sendFile(response, filePath);
+  return keys;
 }
 
-async function requestHandler(request, response) {
-  const url = new URL(request.url, `http://${request.headers.host}`);
+async function getChannels() {
+  const keys = await scanAllChatKeys();
+  const channelMap = {};
+
+  await Promise.all(keys.map(async (key) => {
+    const { channel } = parseKey(key);
+    const len = await redis.lLen(key).catch(() => 0);
+    if (!channelMap[channel]) channelMap[channel] = { conversations: 0, messages: 0 };
+    channelMap[channel].conversations += 1;
+    channelMap[channel].messages += len;
+  }));
+
+  return Object.entries(channelMap)
+    .map(([name, stats]) => ({ name, ...stats }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+async function getConversations(channel) {
+  const keys = await scanAllChatKeys();
+  const matching = keys.filter((k) => parseKey(k).channel === channel);
+
+  const conversations = await Promise.all(matching.map(async (key) => {
+    const { id } = parseKey(key);
+    const len = await redis.lLen(key).catch(() => 0);
+    const ttl = await redis.ttl(key).catch(() => -1);
+    return { id, key, messages: len, ttl };
+  }));
+
+  return conversations.sort((a, b) => b.messages - a.messages);
+}
+
+async function getMessages(key) {
+  const raw = await redis.lRange(key, 0, -1);
+  return raw.map((item, index) => {
+    try {
+      const parsed = JSON.parse(item);
+      return {
+        index,
+        type: parsed.type || "unknown",
+        content: parsed.data?.content || item,
+        raw: parsed
+      };
+    } catch {
+      return { index, type: "raw", content: item, raw: null };
+    }
+  });
+}
+
+async function handler(req, res) {
+  const url = new URL(req.url, `http://${req.headers.host}`);
 
   if (url.pathname === "/api/health") {
-    sendJson(response, 200, {
-      status: redis.isOpen ? "connected" : "connecting",
-      redisUrl: REDIS_URL,
-      streamKey: STREAM_KEY
-    });
+    sendJson(res, 200, { status: redis.isOpen ? "connected" : "connecting", redisUrl: REDIS_URL });
     return;
   }
 
+  if (url.pathname === "/api/channels") {
+    const channels = await getChannels();
+    sendJson(res, 200, { channels });
+    return;
+  }
+
+  // /api/channels/:channel/conversations — channel pode ter "/" codificado ou não
+  const convMatch = url.pathname.match(/^\/api\/channels\/(.+)\/conversations$/);
+  if (convMatch) {
+    const channel = decodeURIComponent(convMatch[1]);
+    const conversations = await getConversations(channel);
+    sendJson(res, 200, { channel, conversations });
+    return;
+  }
+
+  // /api/messages?key=chat:canal:uuid
   if (url.pathname === "/api/messages") {
-    try {
-      const limit = Number(url.searchParams.get("limit") || MAX_RESULTS);
-      const messages = await readMessages(limit);
-      sendJson(response, 200, { messages });
-    } catch (error) {
-      sendJson(response, 500, {
-        error: "Failed to load messages",
-        details: error.message
-      });
+    const key = url.searchParams.get("key");
+    if (!key || !key.startsWith("chat:")) {
+      sendJson(res, 400, { error: "key param required (must start with chat:)" });
+      return;
     }
+    const messages = await getMessages(key);
+    sendJson(res, 200, { key, messages });
     return;
   }
 
-  if (url.pathname === "/api/stats") {
-    try {
-      const messages = await readMessages(MAX_RESULTS);
-      const stats = await readStats(messages);
-      sendJson(response, 200, stats);
-    } catch (error) {
-      sendJson(response, 500, {
-        error: "Failed to load stats",
-        details: error.message
-      });
-    }
-    return;
-  }
-
-  if (request.method === "POST" && url.pathname === "/api/publish-demo") {
-    let body = "";
-    request.on("data", (chunk) => {
-      body += chunk;
-    });
-
-    request.on("end", async () => {
-      try {
-        const input = body ? JSON.parse(body) : {};
-        const event = input.event || "demo.message";
-        const source = input.source || "dashboard";
-        const payload = input.payload || "Mensagem de teste publicada pelo dashboard";
-        const createdAt = new Date().toISOString();
-
-        const id = await redis.xAdd(STREAM_KEY, "*", {
-          event,
-          source,
-          payload,
-          createdAt
-        });
-
-        sendJson(response, 201, { ok: true, id });
-      } catch (error) {
-        sendJson(response, 500, {
-          error: "Failed to publish demo message",
-          details: error.message
-        });
-      }
-    });
-    return;
-  }
-
-  serveStatic(url.pathname, response);
+  serveStatic(url.pathname, res);
 }
 
 async function start() {
   await redis.connect();
-
-  const server = http.createServer((request, response) => {
-    requestHandler(request, response).catch((error) => {
-      sendJson(response, 500, {
-        error: "Unexpected server error",
-        details: error.message
-      });
-    });
+  const server = http.createServer((req, res) => {
+    handler(req, res).catch((err) => sendJson(res, 500, { error: err.message }));
   });
-
   server.listen(PORT, HOST, () => {
-    console.log(`Dashboard running at http://${HOST}:${PORT}`);
-    console.log(`Redis stream: ${STREAM_KEY}`);
+    console.log(`Justy Audit Log running at http://${HOST}:${PORT}`);
   });
 }
 
-start().catch((error) => {
-  console.error("Unable to start server:", error.message);
-  process.exit(1);
-});
+start().catch((err) => { console.error(err.message); process.exit(1); });
