@@ -1,187 +1,188 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Redis Stream Dashboard</title>
-    <link rel="stylesheet" href="/styles.css" />
-  </head>
-  <body>
-    <main class="layout">
-      <section class="hero">
-        <div>
-          <p class="eyebrow">Redis Stream Dashboard</p>
-          <h1>Mensagens em tempo quase real direto do Redis</h1>
-          <p class="subtitle">
-            Painel simples para acompanhar eventos, volume e últimas mensagens
-            publicadas no stream.
-          </p>
-        </div>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Justy Audit Log</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="app-header">
+      <div class="header-left">
+        <button id="btn-back" class="btn-back hidden">← Voltar</button>
+        <h1 id="header-title">Justy Audit Log</h1>
+      </div>
+      <div class="header-right">
+        <span id="status-dot" class="dot dot-loading"></span>
+        <span id="status-label">conectando...</span>
+        <button id="btn-refresh" class="btn-refresh">↻ Atualizar</button>
+      </div>
+    </header>
 
-        <button id="publish-demo" class="primary-button">
-          Publicar mensagem de teste
-        </button>
-      </section>
+    <main id="view" class="view"></main>
+  </div>
 
-      <section class="cards">
-        <article class="card">
-          <span class="label">Status</span>
-          <strong id="status-value">Carregando...</strong>
-        </article>
-        <article class="card">
-          <span class="label">Stream</span>
-          <strong id="stream-key">-</strong>
-        </article>
-        <article class="card">
-          <span class="label">Itens no stream</span>
-          <strong id="stream-length">0</strong>
-        </article>
-        <article class="card">
-          <span class="label">Último ID</span>
-          <strong id="last-message-id">-</strong>
-        </article>
-      </section>
+  <script>
+    // --- Estado ---
+    let currentView = "channels"; // "channels" | "conversations" | "messages"
+    let currentChannel = null;
+    let currentKey = null;
 
-      <section class="panel">
-        <div class="panel-header">
-          <div>
-            <h2>Eventos por tipo</h2>
-            <p>Resumo das mensagens visíveis no dashboard</p>
+    const view = document.getElementById("view");
+    const headerTitle = document.getElementById("header-title");
+    const btnBack = document.getElementById("btn-back");
+    const btnRefresh = document.getElementById("btn-refresh");
+    const statusDot = document.getElementById("status-dot");
+    const statusLabel = document.getElementById("status-label");
+
+    // --- Utilitários ---
+    function truncate(str, n = 40) {
+      return str && str.length > n ? str.slice(0, n) + "…" : str;
+    }
+
+    function formatTtl(ttl) {
+      if (ttl < 0) return "sem expiração";
+      const h = Math.floor(ttl / 3600);
+      const m = Math.floor((ttl % 3600) / 60);
+      return h > 0 ? `${h}h ${m}m` : `${m}m`;
+    }
+
+    function setLoading() {
+      view.innerHTML = '<div class="loading">Carregando...</div>';
+    }
+
+    // --- Status ---
+    async function checkHealth() {
+      try {
+        const res = await fetch("/api/health");
+        const data = await res.json();
+        const ok = data.status === "connected";
+        statusDot.className = "dot " + (ok ? "dot-ok" : "dot-error");
+        statusLabel.textContent = ok ? "conectado" : data.status;
+      } catch {
+        statusDot.className = "dot dot-error";
+        statusLabel.textContent = "erro";
+      }
+    }
+
+    // --- View: Canais ---
+    async function showChannels() {
+      currentView = "channels";
+      currentChannel = null;
+      currentKey = null;
+      headerTitle.textContent = "Justy Audit Log";
+      btnBack.classList.add("hidden");
+      setLoading();
+
+      const res = await fetch("/api/channels");
+      const { channels } = await res.json();
+
+      if (!channels.length) {
+        view.innerHTML = '<div class="empty">Nenhum canal encontrado. Verifique a conexão com o Redis.</div>';
+        return;
+      }
+
+      view.innerHTML = channels.map(ch => `
+        <div class="list-item" data-channel="${encodeURIComponent(ch.name)}">
+          <div class="item-main">
+            <span class="item-title">${ch.name}</span>
+            <span class="item-meta">${ch.conversations} conversa${ch.conversations !== 1 ? "s" : ""} · ${ch.messages} mensagen${ch.messages !== 1 ? "s" : ""}</span>
           </div>
-          <span id="last-refresh" class="refresh-chip">Atualizando...</span>
+          <span class="item-arrow">›</span>
         </div>
-        <div id="event-tags" class="tag-list"></div>
-      </section>
+      `).join("");
 
-      <section class="panel">
-        <div class="panel-header">
-          <div>
-            <h2>Últimas mensagens</h2>
-            <p>Atualização automática a cada 5 segundos</p>
-          </div>
-        </div>
-        <div class="table-wrapper">
-          <table>
-            <thead>
-              <tr>
-                <th>ID</th>
-                <th>Evento</th>
-                <th>Origem</th>
-                <th>Data</th>
-                <th>Payload</th>
-              </tr>
-            </thead>
-            <tbody id="messages-body">
-              <tr>
-                <td colspan="5">Carregando mensagens...</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
-    </main>
-
-    <script>
-      const statusValue = document.getElementById("status-value");
-      const streamKey = document.getElementById("stream-key");
-      const streamLength = document.getElementById("stream-length");
-      const lastMessageId = document.getElementById("last-message-id");
-      const eventTags = document.getElementById("event-tags");
-      const messagesBody = document.getElementById("messages-body");
-      const lastRefresh = document.getElementById("last-refresh");
-      const publishButton = document.getElementById("publish-demo");
-
-      function formatDate(dateValue) {
-        if (!dateValue) return "-";
-        const date = new Date(dateValue);
-        if (Number.isNaN(date.getTime())) return dateValue;
-        return date.toLocaleString("pt-BR");
-      }
-
-      function truncate(value, maxLength = 90) {
-        if (!value) return "-";
-        return value.length > maxLength
-          ? value.slice(0, maxLength) + "..."
-          : value;
-      }
-
-      async function loadHealth() {
-        const response = await fetch("/api/health");
-        const data = await response.json();
-        statusValue.textContent = data.status;
-        streamKey.textContent = data.streamKey;
-      }
-
-      async function loadStats() {
-        const response = await fetch("/api/stats");
-        const data = await response.json();
-
-        streamLength.textContent = data.streamLength;
-        lastMessageId.textContent = data.lastMessageId || "-";
-
-        const items = Object.entries(data.eventsByType);
-        eventTags.innerHTML = items.length
-          ? items
-              .map(
-                ([name, count]) =>
-                  `<span class="tag">${name}<strong>${count}</strong></span>`
-              )
-              .join("")
-          : '<span class="tag empty">Nenhum evento carregado</span>';
-      }
-
-      async function loadMessages() {
-        const response = await fetch("/api/messages?limit=50");
-        const data = await response.json();
-
-        messagesBody.innerHTML = data.messages.length
-          ? data.messages
-              .map(
-                (message) => `
-                  <tr>
-                    <td>${message.id}</td>
-                    <td>${message.event}</td>
-                    <td>${message.source}</td>
-                    <td>${formatDate(message.createdAt)}</td>
-                    <td title="${message.payload.replace(/"/g, "&quot;")}">${truncate(message.payload)}</td>
-                  </tr>
-                `
-              )
-              .join("")
-          : '<tr><td colspan="5">Nenhuma mensagem encontrada no stream.</td></tr>';
-      }
-
-      async function refresh() {
-        try {
-          await Promise.all([loadHealth(), loadStats(), loadMessages()]);
-          lastRefresh.textContent =
-            "Atualizado em " + new Date().toLocaleTimeString("pt-BR");
-        } catch (error) {
-          statusValue.textContent = "error";
-          lastRefresh.textContent = "Falha ao atualizar";
-          console.error(error);
-        }
-      }
-
-      publishButton.addEventListener("click", async () => {
-        publishButton.disabled = true;
-        publishButton.textContent = "Publicando...";
-
-        try {
-          await fetch("/api/publish-demo", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({})
-          });
-          await refresh();
-        } finally {
-          publishButton.disabled = false;
-          publishButton.textContent = "Publicar mensagem de teste";
-        }
+      view.querySelectorAll(".list-item").forEach(el => {
+        el.addEventListener("click", () => {
+          showConversations(decodeURIComponent(el.dataset.channel));
+        });
       });
+    }
 
-      refresh();
-      setInterval(refresh, 5000);
-    </script>
-  </body>
+    // --- View: Conversas ---
+    async function showConversations(channel) {
+      currentView = "conversations";
+      currentChannel = channel;
+      currentKey = null;
+      headerTitle.textContent = truncate(channel, 50);
+      btnBack.classList.remove("hidden");
+      setLoading();
+
+      const res = await fetch(`/api/channels/${encodeURIComponent(channel)}/conversations`);
+      const { conversations } = await res.json();
+
+      if (!conversations.length) {
+        view.innerHTML = '<div class="empty">Nenhuma conversa ativa neste canal.</div>';
+        return;
+      }
+
+      view.innerHTML = conversations.map(conv => `
+        <div class="list-item" data-key="${encodeURIComponent(conv.key)}">
+          <div class="item-main">
+            <span class="item-title item-mono">${truncate(conv.id, 36)}</span>
+            <span class="item-meta">${conv.messages} mensagen${conv.messages !== 1 ? "s" : ""} · expira em ${formatTtl(conv.ttl)}</span>
+          </div>
+          <span class="item-arrow">›</span>
+        </div>
+      `).join("");
+
+      view.querySelectorAll(".list-item").forEach(el => {
+        el.addEventListener("click", () => {
+          showMessages(decodeURIComponent(el.dataset.key));
+        });
+      });
+    }
+
+    // --- View: Mensagens ---
+    async function showMessages(key) {
+      currentView = "messages";
+      currentKey = key;
+      const shortId = key.split(":").pop();
+      headerTitle.textContent = truncate(shortId, 36);
+      btnBack.classList.remove("hidden");
+      setLoading();
+
+      const res = await fetch(`/api/messages?key=${encodeURIComponent(key)}`);
+      const { messages } = await res.json();
+
+      if (!messages.length) {
+        view.innerHTML = '<div class="empty">Nenhuma mensagem nesta conversa.</div>';
+        return;
+      }
+
+      view.innerHTML = '<div class="chat">' + messages.map(msg => `
+        <div class="bubble bubble-${msg.type === "human" ? "human" : "ai"}">
+          <span class="bubble-label">${msg.type === "human" ? "Humano" : "IA"}</span>
+          <p class="bubble-content">${escapeHtml(msg.content)}</p>
+        </div>
+      `).join("") + '</div>';
+    }
+
+    function escapeHtml(str) {
+      return String(str)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    // --- Navegação ---
+    btnBack.addEventListener("click", () => {
+      if (currentView === "messages") showConversations(currentChannel);
+      else if (currentView === "conversations") showChannels();
+    });
+
+    btnRefresh.addEventListener("click", () => {
+      if (currentView === "messages") showMessages(currentKey);
+      else if (currentView === "conversations") showConversations(currentChannel);
+      else showChannels();
+    });
+
+    // --- Init ---
+    checkHealth();
+    showChannels();
+    setInterval(checkHealth, 15000);
+  </script>
+</body>
 </html>
