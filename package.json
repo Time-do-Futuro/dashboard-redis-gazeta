@@ -1,7 +1,7 @@
 {
-  "name": "redis-stream-dashboard",
+  "name": "justy-audit-log",
   "version": "1.0.0",
-  "description": "Dashboard simples para visualizar mensagens de um Redis Stream",
+  "description": "Dashboard de auditoria de conversas do Redis - Justy",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
