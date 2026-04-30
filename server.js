@@ -54,14 +54,7 @@ function parseKey(key) {
 }
 
 async function scanAllChatKeys() {
-  const keys = [];
-  let cursor = 0;
-  do {
-    const result = await redis.scan(cursor, { MATCH: "chat:*", COUNT: 100 });
-    cursor = result.cursor;
-    keys.push(...result.keys);
-  } while (cursor !== 0);
-  return keys;
+  return redis.keys("chat:*");
 }
 
 async function getChannels() {
