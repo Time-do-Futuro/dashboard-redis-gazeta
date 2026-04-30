@@ -20,16 +20,17 @@
       </div>
     </header>
 
+    <div id="dashboard" class="dashboard hidden"></div>
     <main id="view" class="view"></main>
   </div>
 
   <script>
-    // --- Estado ---
-    let currentView = "channels"; // "channels" | "conversations" | "messages"
+    let currentView = "channels";
     let currentChannel = null;
     let currentKey = null;
 
     const view = document.getElementById("view");
+    const dashboard = document.getElementById("dashboard");
     const headerTitle = document.getElementById("header-title");
     const btnBack = document.getElementById("btn-back");
     const btnRefresh = document.getElementById("btn-refresh");
@@ -41,18 +42,28 @@
       return str && str.length > n ? str.slice(0, n) + "…" : str;
     }
 
-    function formatTtl(ttl) {
-      if (ttl < 0) return "sem expiração";
-      const h = Math.floor(ttl / 3600);
-      const m = Math.floor((ttl % 3600) / 60);
-      return h > 0 ? `${h}h ${m}m` : `${m}m`;
+    function formatDateTime(iso) {
+      if (!iso) return "-";
+      const d = new Date(iso);
+      return d.toLocaleDateString("pt-BR") + " " +
+        d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+    }
+
+    function formatDateShort(iso) {
+      if (!iso) return "-";
+      const d = new Date(typeof iso === "string" && iso.length === 10 ? iso + "T12:00:00" : iso);
+      return d.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" });
+    }
+
+    function today() {
+      return new Date().toISOString().slice(0, 10);
     }
 
     function setLoading() {
       view.innerHTML = '<div class="loading">Carregando...</div>';
     }
 
-    // --- Status ---
+    // --- Health ---
     async function checkHealth() {
       try {
         const res = await fetch("/api/health");
@@ -66,6 +77,63 @@
       }
     }
 
+    // --- Dashboard ---
+    async function loadDashboard(from, to) {
+      const f = from || today();
+      const t = to || today();
+      const res = await fetch(`/api/stats/daily?from=${f}&to=${t}`);
+      const { channels } = await res.json();
+
+      const todayCards = channels.map(ch => `
+        <div class="today-card">
+          <span class="today-card-label">${truncate(ch.name, 22)}</span>
+          <span class="today-card-number">${ch.today}</span>
+          <span class="today-card-sub">conversas hoje</span>
+        </div>
+      `).join("");
+
+      const totalFilter = channels.reduce((s, ch) => s + ch.total, 0);
+      const allDays = {};
+      for (const ch of channels) {
+        for (const d of ch.days) {
+          allDays[d.date] = (allDays[d.date] || 0) + d.count;
+        }
+      }
+      const dayBars = Object.entries(allDays).sort(([a], [b]) => a.localeCompare(b)).map(([date, count]) => `
+        <div class="day-bar">
+          <span class="day-bar-count">${count}</span>
+          <span class="day-bar-date">${formatDateShort(date)}</span>
+        </div>
+      `).join("");
+
+      dashboard.innerHTML = `
+        <div class="dash-today">
+          <span class="dash-section-label">HOJE</span>
+          <div class="today-cards">${todayCards || '<span style="color:var(--muted);font-size:.9rem">Nenhuma conversa hoje.</span>'}</div>
+        </div>
+        <div class="dash-filter">
+          <span class="dash-section-label">FILTRO DE DATAS</span>
+          <div class="filter-controls">
+            <label>De <input type="date" id="filter-from" value="${f}" /></label>
+            <label>Até <input type="date" id="filter-to" value="${t}" /></label>
+            <button id="filter-apply" class="btn-filter">Filtrar</button>
+          </div>
+          ${totalFilter > 0 ? `
+            <div class="filter-result">
+              <span class="filter-total">Total: <strong>${totalFilter}</strong></span>
+              <div class="day-bars">${dayBars}</div>
+            </div>
+          ` : '<div class="filter-empty">Nenhuma conversa no período.</div>'}
+        </div>
+      `;
+
+      document.getElementById("filter-apply").addEventListener("click", () => {
+        const f2 = document.getElementById("filter-from").value;
+        const t2 = document.getElementById("filter-to").value;
+        loadDashboard(f2, t2);
+      });
+    }
+
     // --- View: Canais ---
     async function showChannels() {
       currentView = "channels";
@@ -73,13 +141,16 @@
       currentKey = null;
       headerTitle.textContent = "Justy Audit Log";
       btnBack.classList.add("hidden");
+      dashboard.classList.remove("hidden");
       setLoading();
+
+      await loadDashboard();
 
       const res = await fetch("/api/channels");
       const { channels } = await res.json();
 
       if (!channels.length) {
-        view.innerHTML = '<div class="empty">Nenhum canal encontrado. Verifique a conexão com o Redis.</div>';
+        view.innerHTML = '<div class="empty">Nenhum canal encontrado.</div>';
         return;
       }
 
@@ -87,7 +158,7 @@
         <div class="list-item" data-channel="${encodeURIComponent(ch.name)}">
           <div class="item-main">
             <span class="item-title">${ch.name}</span>
-            <span class="item-meta">${ch.conversations} conversa${ch.conversations !== 1 ? "s" : ""} · ${ch.messages} mensagen${ch.messages !== 1 ? "s" : ""}</span>
+            <span class="item-meta">${ch.conversations} conversa${ch.conversations !== 1 ? "s" : ""} · última: ${formatDateTime(ch.lastUpdated)}</span>
           </div>
           <span class="item-arrow">›</span>
         </div>
@@ -107,13 +178,14 @@
       currentKey = null;
       headerTitle.textContent = truncate(channel, 50);
       btnBack.classList.remove("hidden");
+      dashboard.classList.add("hidden");
       setLoading();
 
       const res = await fetch(`/api/channels/${encodeURIComponent(channel)}/conversations`);
       const { conversations } = await res.json();
 
       if (!conversations.length) {
-        view.innerHTML = '<div class="empty">Nenhuma conversa ativa neste canal.</div>';
+        view.innerHTML = '<div class="empty">Nenhuma conversa encontrada.</div>';
         return;
       }
 
@@ -121,7 +193,7 @@
         <div class="list-item" data-key="${encodeURIComponent(conv.key)}">
           <div class="item-main">
             <span class="item-title item-mono">${truncate(conv.id, 36)}</span>
-            <span class="item-meta">${conv.messages} mensagen${conv.messages !== 1 ? "s" : ""} · expira em ${formatTtl(conv.ttl)}</span>
+            <span class="item-meta">${conv.messages} mensagen${conv.messages !== 1 ? "s" : ""} · ${formatDateTime(conv.updatedAt)}</span>
           </div>
           <span class="item-arrow">›</span>
         </div>
@@ -141,6 +213,7 @@
       const shortId = key.split(":").pop();
       headerTitle.textContent = truncate(shortId, 36);
       btnBack.classList.remove("hidden");
+      dashboard.classList.add("hidden");
       setLoading();
 
       const res = await fetch(`/api/messages?key=${encodeURIComponent(key)}`);
@@ -153,7 +226,10 @@
 
       view.innerHTML = '<div class="chat">' + messages.map(msg => `
         <div class="bubble bubble-${msg.type === "human" ? "human" : "ai"}">
-          <span class="bubble-label">${msg.type === "human" ? "Humano" : "IA"}</span>
+          <div class="bubble-header">
+            <span class="bubble-label">${msg.type === "human" ? "Humano" : "IA"}</span>
+            <span class="bubble-time">${formatDateTime(msg.created_at)}</span>
+          </div>
           <p class="bubble-content">${escapeHtml(msg.content)}</p>
         </div>
       `).join("") + '</div>';
