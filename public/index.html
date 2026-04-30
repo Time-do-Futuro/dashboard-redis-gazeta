@@ -78,13 +78,14 @@
     }
 
     // --- Dashboard ---
-    async function loadDashboard(from, to) {
+    async function loadDashboard(from, to, selectedChannel) {
       const f = from || today();
       const t = to || today();
       const res = await fetch(`/api/stats/daily?from=${f}&to=${t}`);
-      const { channels } = await res.json();
+      const { channels: allChannels } = await res.json();
 
-      const todayCards = channels.map(ch => `
+      // Cards "hoje" — sempre mostram todos os canais
+      const todayCards = allChannels.map(ch => `
         <div class="today-card">
           <span class="today-card-label">${truncate(ch.name, 22)}</span>
           <span class="today-card-number">${ch.today}</span>
@@ -92,9 +93,22 @@
         </div>
       `).join("");
 
-      const totalFilter = channels.reduce((s, ch) => s + ch.total, 0);
+      // Filtro de canal — dropdown com "Todos" + cada canal
+      const channelOptions = [
+        `<option value="">Todos os chats</option>`,
+        ...allChannels.map(ch =>
+          `<option value="${encodeURIComponent(ch.name)}" ${selectedChannel === ch.name ? "selected" : ""}>${ch.name}</option>`
+        )
+      ].join("");
+
+      // Aplica filtro de canal para as estatísticas por data
+      const filtered = selectedChannel
+        ? allChannels.filter(ch => ch.name === selectedChannel)
+        : allChannels;
+
+      const totalFilter = filtered.reduce((s, ch) => s + ch.total, 0);
       const allDays = {};
-      for (const ch of channels) {
+      for (const ch of filtered) {
         for (const d of ch.days) {
           allDays[d.date] = (allDays[d.date] || 0) + d.count;
         }
@@ -114,6 +128,7 @@
         <div class="dash-filter">
           <span class="dash-section-label">FILTRO DE DATAS</span>
           <div class="filter-controls">
+            <label>Chat <select id="filter-channel" class="filter-select">${channelOptions}</select></label>
             <label>De <input type="date" id="filter-from" value="${f}" /></label>
             <label>Até <input type="date" id="filter-to" value="${t}" /></label>
             <button id="filter-apply" class="btn-filter">Filtrar</button>
@@ -130,7 +145,8 @@
       document.getElementById("filter-apply").addEventListener("click", () => {
         const f2 = document.getElementById("filter-from").value;
         const t2 = document.getElementById("filter-to").value;
-        loadDashboard(f2, t2);
+        const ch = document.getElementById("filter-channel").value;
+        loadDashboard(f2, t2, ch ? decodeURIComponent(ch) : null);
       });
     }
 
