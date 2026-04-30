@@ -55,9 +55,12 @@ function parseKey(key) {
 
 async function scanAllChatKeys() {
   const keys = [];
-  for await (const key of redis.scanIterator({ MATCH: "chat:*", COUNT: 100 })) {
-    keys.push(key);
-  }
+  let cursor = 0;
+  do {
+    const result = await redis.scan(cursor, { MATCH: "chat:*", COUNT: 100 });
+    cursor = result.cursor;
+    keys.push(...result.keys);
+  } while (cursor !== 0);
   return keys;
 }
 
