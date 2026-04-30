@@ -3,14 +3,19 @@ const fs = require("fs");
 const path = require("path");
 const { URL } = require("url");
 const { createClient } = require("redis");
+const {
+  initDb, getChannels, getConversations, getMessages,
+  getDailyStats, getTodayStats
+} = require("./db");
+const { syncKey, startCollector } = require("./collector");
 
 const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || "0.0.0.0";
 const REDIS_URL = process.env.REDIS_URL || "redis://127.0.0.1:6379";
 const PUBLIC_DIR = path.join(__dirname, "public");
 
-const redis = createClient({ url: REDIS_URL });
-redis.on("error", (err) => console.error("Redis error:", err.message));
+const redisData = createClient({ url: REDIS_URL });
+redisData.on("error", (err) => console.error("Redis error:", err.message));
 
 function sendJson(res, status, payload) {
   res.writeHead(status, {
@@ -41,102 +46,85 @@ function serveStatic(pathname, res) {
   sendFile(res, filePath);
 }
 
-// Extrai o nome do canal de uma chave "chat:{canal}:{uuid}"
-// O canal pode conter ":" no nome, por isso pega tudo exceto o último segmento
-function parseKey(key) {
-  const withoutPrefix = key.replace(/^chat:/, "");
-  const lastColon = withoutPrefix.lastIndexOf(":");
-  if (lastColon === -1) return { channel: withoutPrefix, id: "" };
-  return {
-    channel: withoutPrefix.slice(0, lastColon),
-    id: withoutPrefix.slice(lastColon + 1)
-  };
-}
-
-async function scanAllChatKeys() {
-  return redis.keys("chat:*");
-}
-
-async function getChannels() {
-  const keys = await scanAllChatKeys();
-  const channelMap = {};
-
-  await Promise.all(keys.map(async (key) => {
-    const { channel } = parseKey(key);
-    const len = await redis.lLen(key).catch(() => 0);
-    if (!channelMap[channel]) channelMap[channel] = { conversations: 0, messages: 0 };
-    channelMap[channel].conversations += 1;
-    channelMap[channel].messages += len;
-  }));
-
-  return Object.entries(channelMap)
-    .map(([name, stats]) => ({ name, ...stats }))
-    .sort((a, b) => a.name.localeCompare(b.name));
-}
-
-async function getConversations(channel) {
-  const keys = await scanAllChatKeys();
-  const matching = keys.filter((k) => parseKey(k).channel === channel);
-
-  const conversations = await Promise.all(matching.map(async (key) => {
-    const { id } = parseKey(key);
-    const len = await redis.lLen(key).catch(() => 0);
-    const ttl = await redis.ttl(key).catch(() => -1);
-    return { id, key, messages: len, ttl };
-  }));
-
-  return conversations.sort((a, b) => b.messages - a.messages);
-}
-
-async function getMessages(key) {
-  const raw = await redis.lRange(key, 0, -1);
-  return raw.map((item, index) => {
-    try {
-      const parsed = JSON.parse(item);
-      return {
-        index,
-        type: parsed.type || "unknown",
-        content: parsed.data?.content || item,
-        raw: parsed
-      };
-    } catch {
-      return { index, type: "raw", content: item, raw: null };
-    }
-  });
-}
-
 async function handler(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
 
   if (url.pathname === "/api/health") {
-    sendJson(res, 200, { status: redis.isOpen ? "connected" : "connecting", redisUrl: REDIS_URL });
+    sendJson(res, 200, {
+      status: redisData.isOpen ? "connected" : "connecting",
+      redisUrl: REDIS_URL
+    });
     return;
   }
 
   if (url.pathname === "/api/channels") {
-    const channels = await getChannels();
+    const rows = await getChannels();
+    const channels = rows.map((r) => ({
+      name: r.channel,
+      conversations: Number(r.conversations),
+      lastUpdated: r.last_updated
+    }));
     sendJson(res, 200, { channels });
     return;
   }
 
-  // /api/channels/:channel/conversations — channel pode ter "/" codificado ou não
   const convMatch = url.pathname.match(/^\/api\/channels\/(.+)\/conversations$/);
   if (convMatch) {
     const channel = decodeURIComponent(convMatch[1]);
-    const conversations = await getConversations(channel);
+    const rows = await getConversations(channel);
+    const conversations = rows.map((r) => ({
+      id: r.id,
+      key: r.redis_key,
+      messages: Number(r.message_count),
+      createdAt: r.created_at,
+      updatedAt: r.updated_at
+    }));
     sendJson(res, 200, { channel, conversations });
     return;
   }
 
-  // /api/messages?key=chat:canal:uuid
   if (url.pathname === "/api/messages") {
     const key = url.searchParams.get("key");
     if (!key || !key.startsWith("chat:")) {
       sendJson(res, 400, { error: "key param required (must start with chat:)" });
       return;
     }
-    const messages = await getMessages(key);
-    sendJson(res, 200, { key, messages });
+    const rows = await getMessages(key);
+    sendJson(res, 200, { key, messages: rows });
+    return;
+  }
+
+  if (url.pathname === "/api/stats/daily") {
+    const today = new Date().toISOString().slice(0, 10);
+    const from = url.searchParams.get("from") || today;
+    const to = url.searchParams.get("to") || today;
+
+    const [dailyRows, todayRows] = await Promise.all([
+      getDailyStats(from, to),
+      getTodayStats()
+    ]);
+
+    const channelMap = {};
+
+    for (const row of dailyRows) {
+      if (!channelMap[row.channel]) {
+        channelMap[row.channel] = { name: row.channel, today: 0, total: 0, days: [] };
+      }
+      channelMap[row.channel].total += Number(row.count);
+      channelMap[row.channel].days.push({
+        date: row.date,
+        count: Number(row.count)
+      });
+    }
+
+    for (const row of todayRows) {
+      if (!channelMap[row.channel]) {
+        channelMap[row.channel] = { name: row.channel, today: 0, total: 0, days: [] };
+      }
+      channelMap[row.channel].today = Number(row.count);
+    }
+
+    sendJson(res, 200, { channels: Object.values(channelMap) });
     return;
   }
 
@@ -144,12 +132,23 @@ async function handler(req, res) {
 }
 
 async function start() {
-  await redis.connect();
+  await redisData.connect();
+  await initDb();
+
+  console.log("Syncing existing Redis keys...");
+  const existingKeys = await redisData.keys("chat:*");
+  for (const key of existingKeys) {
+    await syncKey(redisData, key);
+  }
+  console.log(`Synced ${existingKeys.length} existing keys.`);
+
+  await startCollector(redisData, REDIS_URL);
+
   const server = http.createServer((req, res) => {
     handler(req, res).catch((err) => sendJson(res, 500, { error: err.message }));
   });
   server.listen(PORT, HOST, () => {
-    console.log(`Justy Audit Log running at http://${HOST}:${PORT}`);
+    console.log(`Justy Audit Log v2 running at http://${HOST}:${PORT}`);
   });
 }
 
