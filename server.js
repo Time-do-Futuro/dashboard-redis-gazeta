@@ -148,7 +148,7 @@ async function start() {
     handler(req, res).catch((err) => sendJson(res, 500, { error: err.message }));
   });
   server.listen(PORT, HOST, () => {
-    console.log(`Justy Audit Log v2 running at http://${HOST}:${PORT}`);
+    console.log(`Fluxos Rede Gazeta Audit Log running at http://${HOST}:${PORT}`);
   });
 }
 
