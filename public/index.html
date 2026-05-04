@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Fluxos Rede Gazeta Audit Log</title>
   <link rel="stylesheet" href="/styles.css" />
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
   <div class="app">
@@ -262,38 +263,55 @@
         .replace(/"/g, "&quot;");
     }
 
+    // Configure marked: GitHub-flavored markdown, line breaks
+    marked.use({ gfm: true, breaks: true });
+
+    function renderToolCalls(toolsRaw) {
+      const toolCount = (toolsRaw.match(/\bTool:/g) || []).length;
+      const inner = toolsRaw
+        .replace(/^\[Used tools:\s*/i, "")
+        .replace(/\]$/, "")
+        .trim();
+      const formatted = inner
+        .replace(/;\s*Tool:/g, "\n\n─────────────────────\nTool:")
+        .replace(/,\s*Result:\s*/g, "\nResult: ")
+        .replace(/,\s*Input:\s*/g, "\nInput:  ");
+      return `<details class="tool-calls">
+        <summary>🔧 ${toolCount} chamada${toolCount !== 1 ? "s" : ""} de ferramenta <span class="tool-calls-hint">— clique para ver detalhes</span></summary>
+        <pre class="tool-calls-body">${escapeHtml(formatted)}</pre>
+      </details>`;
+    }
+
     function formatMessageContent(content) {
-      const trimmed = (content || "").trim();
+      const raw = (content || "").trim();
 
-      // Tool calls pattern: [Used tools: Tool: X, Input: Y, Result: Z; ...]
-      if (trimmed.includes("[Used tools:")) {
-        const toolCount = (trimmed.match(/\bTool:/g) || []).length;
-        const inner = trimmed
-          .replace(/^\[Used tools:\s*/i, "")
-          .replace(/\]$/, "")
-          .trim();
+      // Separate text from the [Used tools: ...] block (tool calls appear after the response text)
+      const toolsIdx = raw.indexOf("[Used tools:");
+      const textPart  = toolsIdx >= 0 ? raw.slice(0, toolsIdx).trim() : raw;
+      const toolsPart = toolsIdx >= 0 ? raw.slice(toolsIdx) : null;
 
-        // Try to pretty-print each JSON blob inside the tool call text
-        const formatted = inner
-          .replace(/;\s*Tool:/g, "\n\n─────────────────────\nTool:")
-          .replace(/,\s*Result:\s*/g, "\nResult: ")
-          .replace(/,\s*Input:\s*/g, "\nInput:  ");
+      let html = "";
 
-        return `<details class="tool-calls">
-          <summary>🔧 ${toolCount} chamada${toolCount !== 1 ? "s" : ""} de ferramenta <span class="tool-calls-hint">— clique para ver detalhes</span></summary>
-          <pre class="tool-calls-body">${escapeHtml(formatted)}</pre>
-        </details>`;
+      if (textPart) {
+        // Pure JSON: pretty-print in a code block
+        if (textPart.startsWith("{") || textPart.startsWith("[")) {
+          try {
+            const parsed = JSON.parse(textPart);
+            html += `<pre class="msg-json">${escapeHtml(JSON.stringify(parsed, null, 2))}</pre>`;
+          } catch (_) {
+            html += marked.parse(textPart);
+          }
+        } else {
+          // Markdown rendering
+          html += marked.parse(textPart);
+        }
       }
 
-      // Pure JSON content
-      if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-        try {
-          const parsed = JSON.parse(trimmed);
-          return `<pre class="msg-json">${escapeHtml(JSON.stringify(parsed, null, 2))}</pre>`;
-        } catch (_) { /* not valid JSON, fall through */ }
+      if (toolsPart) {
+        html += renderToolCalls(toolsPart);
       }
 
-      return escapeHtml(trimmed);
+      return html || `<span class="msg-empty">(mensagem vazia)</span>`;
     }
 
     // --- Navegação ---
