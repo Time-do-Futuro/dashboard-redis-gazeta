@@ -270,22 +270,37 @@
     // Configure marked: GitHub-flavored markdown, line breaks
     marked.use({ gfm: true, breaks: true });
 
+    // Remove ALL [Used tools: ...] blocks from anywhere in the message.
+    // Uses bracket counting to handle nested JSON arrays/objects inside the block.
+    function stripToolCalls(content) {
+      let result = content;
+      let idx;
+      while ((idx = result.indexOf("[Used tools:")) >= 0) {
+        let depth = 0, end = result.length - 1;
+        for (let i = idx; i < result.length; i++) {
+          if (result[i] === "[") depth++;
+          else if (result[i] === "]") {
+            depth--;
+            if (depth === 0) { end = i; break; }
+          }
+        }
+        result = (result.slice(0, idx) + result.slice(end + 1)).trim();
+      }
+      return result.trim();
+    }
+
     // Returns rendered HTML string, or null if message has no displayable content
     function formatMessageContent(content) {
-      const raw = (content || "").trim();
+      const textPart = stripToolCalls(content || "");
 
-      // Strip [Used tools: ...] block — it's internal and not relevant to display
-      const toolsIdx = raw.indexOf("[Used tools:");
-      const textPart = toolsIdx >= 0 ? raw.slice(0, toolsIdx).trim() : raw;
-
-      if (!textPart) return null; // nothing to show
+      if (!textPart) return null; // nothing to show (tool-only message)
 
       // Pure JSON: pretty-print in a monospace block
       if (textPart.startsWith("{") || textPart.startsWith("[")) {
         try {
           const parsed = JSON.parse(textPart);
           return `<pre class="msg-json">${escapeHtml(JSON.stringify(parsed, null, 2))}</pre>`;
-        } catch (_) { /* not valid JSON */ }
+        } catch (_) { /* not valid JSON, fall through */ }
       }
 
       // Render as markdown
