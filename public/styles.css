@@ -364,6 +364,74 @@ body {
 .day-bar-count { font-size: 1.1rem; font-weight: 700; color: var(--accent); }
 .day-bar-date { font-size: 0.69rem; color: var(--muted); margin-top: 2px; }
 
+/* ── Tool calls / JSON ───────────────────────────── */
+.tool-calls {
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  overflow: hidden;
+  margin: 2px 0;
+}
+
+.tool-calls summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  cursor: pointer;
+  background: var(--accent-light);
+  color: var(--accent);
+  font-size: 0.82rem;
+  font-weight: 600;
+  user-select: none;
+  list-style: none;
+  transition: background 0.12s;
+}
+.tool-calls summary::-webkit-details-marker { display: none; }
+.tool-calls summary::before {
+  content: "▶";
+  font-size: 0.6rem;
+  transition: transform 0.15s;
+}
+.tool-calls[open] summary::before { transform: rotate(90deg); }
+.tool-calls summary:hover { background: #ddd6fe; }
+
+.tool-calls-hint {
+  font-weight: 400;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.tool-calls-body {
+  margin: 0;
+  padding: 12px 14px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-family: "JetBrains Mono", "Fira Code", monospace;
+  font-size: 0.76rem;
+  line-height: 1.6;
+  color: var(--text);
+  background: #fafafa;
+  max-height: 320px;
+  overflow-y: auto;
+  border-top: 1px solid var(--border);
+}
+
+.msg-json {
+  margin: 2px 0;
+  padding: 10px 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-family: "JetBrains Mono", "Fira Code", monospace;
+  font-size: 0.76rem;
+  line-height: 1.6;
+  color: var(--text);
+  background: #fafafa;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
 /* ── Responsivo ──────────────────────────────────── */
 @media (max-width: 700px) {
   .dashboard { grid-template-columns: 1fr; }
