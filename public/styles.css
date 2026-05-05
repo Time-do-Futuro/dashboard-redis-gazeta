@@ -551,7 +551,6 @@ body {
 
 /* ── Responsivo ──────────────────────────────────── */
 @media (max-width: 700px) {
-  .dashboard { grid-template-columns: 1fr; }
   .dash-row2 { grid-template-columns: 1fr; }
   .today-cards { flex-wrap: wrap; }
   .metric-cards { flex-wrap: wrap; }
