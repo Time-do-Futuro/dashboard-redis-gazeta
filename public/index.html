@@ -87,20 +87,23 @@
         <div class="metric-cards">
           <div class="metric-card">
             <span class="metric-label">Conversas</span>
-            <span class="metric-number">${summary.total_conversations}</span>
+            <span class="metric-number">${Number(summary.total_conversations) || 0}</span>
           </div>
           <div class="metric-card">
             <span class="metric-label">Mensagens</span>
-            <span class="metric-number">${summary.total_messages}</span>
+            <span class="metric-number">${Number(summary.total_messages) || 0}</span>
           </div>
           <div class="metric-card">
             <span class="metric-label">Média msgs/conv</span>
-            <span class="metric-number">${summary.avg_messages_per_conv}</span>
+            <span class="metric-number">${Number(summary.avg_messages_per_conv) || 0}</span>
           </div>
         </div>`;
     }
 
     function buildHeatmap(heatmapData) {
+      if (!heatmapData || !heatmapData.length) {
+        return '<p style="color:var(--muted);font-size:0.85rem;padding:8px 0">Sem dados de atividade no período.</p>';
+      }
       const DAYS  = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
       const grid  = {};
       let maxCount = 0;
@@ -142,104 +145,109 @@
     async function loadDashboard(from, to, selectedChannel) {
       const f = from || today();
       const t = to   || today();
-      const chParam = selectedChannel ? `&channel=${encodeURIComponent(selectedChannel)}` : "";
 
-      // Fetch all three data sources in parallel
-      const [statsRes, globalSummaryRes, filteredSummaryRes] = await Promise.all([
-        fetch(`/api/stats/daily?from=${f}&to=${t}`),
-        fetch(`/api/stats/summary?from=${f}&to=${t}`),
-        fetch(`/api/stats/summary?from=${f}&to=${t}${chParam}`)
-      ]);
+      try {
+        const chParam = selectedChannel ? `&channel=${encodeURIComponent(selectedChannel)}` : "";
 
-      const { channels: allChannels } = await statsRes.json();
-      const globalSummary             = await globalSummaryRes.json();
-      const filteredSummary           = await filteredSummaryRes.json();
+        // Fetch all three data sources in parallel
+        const [statsRes, globalSummaryRes, filteredSummaryRes] = await Promise.all([
+          fetch(`/api/stats/daily?from=${f}&to=${t}`),
+          fetch(`/api/stats/summary?from=${f}&to=${t}`),
+          fetch(`/api/stats/summary?from=${f}&to=${t}${chParam}`)
+        ]);
 
-      // ── Today cards (always all channels) ──
-      const todayCards = allChannels.map(ch => `
-        <div class="today-card">
-          <span class="today-card-label">${truncate(ch.name, 22)}</span>
-          <span class="today-card-number">${ch.today}</span>
-          <span class="today-card-sub">conversas hoje</span>
-        </div>
-      `).join("");
+        const { channels: allChannels } = await statsRes.json();
+        const globalSummary             = await globalSummaryRes.json();
+        const filteredSummary           = await filteredSummaryRes.json();
 
-      // ── Channel dropdown ──
-      const channelOptions = [
-        `<option value="">Todos os chats</option>`,
-        ...allChannels.map(ch =>
-          `<option value="${encodeURIComponent(ch.name)}" ${selectedChannel === ch.name ? "selected" : ""}>${ch.name}</option>`
-        )
-      ].join("");
-
-      // ── Day bars (filtered by channel) ──
-      const filtered = selectedChannel
-        ? allChannels.filter(ch => ch.name === selectedChannel)
-        : allChannels;
-
-      const totalFilter = filtered.reduce((s, ch) => s + ch.total, 0);
-      const allDays = {};
-      for (const ch of filtered) {
-        for (const d of ch.days) {
-          allDays[d.date] = (allDays[d.date] || 0) + d.count;
-        }
-      }
-      const dayBars = Object.entries(allDays)
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([date, count]) => `
-          <div class="day-bar">
-            <span class="day-bar-count">${count}</span>
-            <span class="day-bar-date">${formatDateShort(date)}</span>
+        // ── Today cards (always all channels) ──
+        const todayCards = allChannels.map(ch => `
+          <div class="today-card">
+            <span class="today-card-label">${escapeHtml(truncate(ch.name, 22))}</span>
+            <span class="today-card-number">${ch.today}</span>
+            <span class="today-card-sub">conversas hoje</span>
           </div>
         `).join("");
 
-      // ── Render ──
-      dashboard.innerHTML = `
-        <!-- Global panel: all channels, follows date filter -->
-        <div class="dash-global">
-          <span class="dash-section-label">PERÍODO SELECIONADO — TODOS OS CHATS</span>
-          ${buildMetricCards(globalSummary)}
-          <span class="dash-section-label">HORÁRIOS DE MAIOR ATIVIDADE</span>
-          <div class="heatmap-wrap">${buildHeatmap(globalSummary.heatmap)}</div>
-        </div>
+        // ── Channel dropdown ──
+        const channelOptions = [
+          `<option value="">Todos os chats</option>`,
+          ...allChannels.map(ch =>
+            `<option value="${encodeURIComponent(ch.name)}" ${selectedChannel === ch.name ? "selected" : ""}>${escapeHtml(ch.name)}</option>`
+          )
+        ].join("");
 
-        <!-- Bottom row: today cards + filter panel -->
-        <div class="dash-row2">
-          <div class="dash-today">
-            <span class="dash-section-label">HOJE</span>
-            <div class="today-cards">${todayCards || '<span style="color:var(--muted);font-size:.9rem">Nenhuma conversa hoje.</span>'}</div>
+        // ── Day bars (filtered by channel) ──
+        const filtered = selectedChannel
+          ? allChannels.filter(ch => ch.name === selectedChannel)
+          : allChannels;
+
+        const totalFilter = filtered.reduce((s, ch) => s + ch.total, 0);
+        const allDays = {};
+        for (const ch of filtered) {
+          for (const d of ch.days) {
+            allDays[d.date] = (allDays[d.date] || 0) + d.count;
+          }
+        }
+        const dayBars = Object.entries(allDays)
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([date, count]) => `
+            <div class="day-bar">
+              <span class="day-bar-count">${count}</span>
+              <span class="day-bar-date">${formatDateShort(date)}</span>
+            </div>
+          `).join("");
+
+        // ── Render ──
+        dashboard.innerHTML = `
+          <!-- Global panel: all channels, follows date filter -->
+          <div class="dash-global">
+            <span class="dash-section-label">PERÍODO SELECIONADO — TODOS OS CHATS</span>
+            ${buildMetricCards(globalSummary)}
+            <span class="dash-section-label">HORÁRIOS DE MAIOR ATIVIDADE</span>
+            <div class="heatmap-wrap">${buildHeatmap(globalSummary.heatmap || [])}</div>
           </div>
 
-          <div class="dash-filter">
-            <span class="dash-section-label">FILTRO DE DATAS</span>
-            <div class="filter-controls">
-              <label>Chat <select id="filter-channel" class="filter-select">${channelOptions}</select></label>
-              <label>De <input type="date" id="filter-from" value="${f}" /></label>
-              <label>Até <input type="date" id="filter-to" value="${t}" /></label>
-              <button id="filter-apply" class="btn-filter">Filtrar</button>
+          <!-- Bottom row: today cards + filter panel -->
+          <div class="dash-row2">
+            <div class="dash-today">
+              <span class="dash-section-label">HOJE</span>
+              <div class="today-cards">${todayCards || '<span style="color:var(--muted);font-size:.9rem">Nenhuma conversa hoje.</span>'}</div>
             </div>
 
-            ${totalFilter > 0 ? `
-              <div class="filter-result">
-                <span class="filter-total">Total: <strong>${totalFilter}</strong></span>
-                <div class="day-bars">${dayBars}</div>
+            <div class="dash-filter">
+              <span class="dash-section-label">FILTRO DE DATAS</span>
+              <div class="filter-controls">
+                <label>Chat <select id="filter-channel" class="filter-select">${channelOptions}</select></label>
+                <label>De <input type="date" id="filter-from" value="${f}" /></label>
+                <label>Até <input type="date" id="filter-to" value="${t}" /></label>
+                <button id="filter-apply" class="btn-filter">Filtrar</button>
               </div>
-            ` : '<div class="filter-empty">Nenhuma conversa no período.</div>'}
 
-            <div style="margin-top:16px">
-              <span class="dash-section-label">${selectedChannel ? truncate(selectedChannel, 30) : "TODOS OS CHATS"} — MÉTRICAS DO PERÍODO</span>
-              ${buildMetricCards(filteredSummary)}
+              ${totalFilter > 0 ? `
+                <div class="filter-result">
+                  <span class="filter-total">Total: <strong>${totalFilter}</strong></span>
+                  <div class="day-bars">${dayBars}</div>
+                </div>
+              ` : '<div class="filter-empty">Nenhuma conversa no período.</div>'}
+
+              <div style="margin-top:16px">
+                <span class="dash-section-label">${selectedChannel ? truncate(selectedChannel, 30) : "TODOS OS CHATS"} — MÉTRICAS DO PERÍODO</span>
+                ${buildMetricCards(filteredSummary)}
+              </div>
             </div>
           </div>
-        </div>
-      `;
+        `;
 
-      document.getElementById("filter-apply").addEventListener("click", () => {
-        const f2 = document.getElementById("filter-from").value;
-        const t2 = document.getElementById("filter-to").value;
-        const ch = document.getElementById("filter-channel").value;
-        loadDashboard(f2, t2, ch ? decodeURIComponent(ch) : null);
-      });
+        document.getElementById("filter-apply").addEventListener("click", () => {
+          const f2 = document.getElementById("filter-from").value;
+          const t2 = document.getElementById("filter-to").value;
+          const ch = document.getElementById("filter-channel").value;
+          loadDashboard(f2, t2, ch ? decodeURIComponent(ch) : null);
+        });
+      } catch (err) {
+        dashboard.innerHTML = `<div class="dash-global"><span style="color:var(--dot-error);font-size:0.9rem">Erro ao carregar métricas: ${escapeHtml(err.message)}</span></div>`;
+      }
     }
 
     // --- View: Canais ---
