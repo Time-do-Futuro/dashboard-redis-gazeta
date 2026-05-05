@@ -82,13 +82,80 @@
     }
 
     // --- Dashboard ---
+    function buildMetricCards(summary) {
+      return `
+        <div class="metric-cards">
+          <div class="metric-card">
+            <span class="metric-label">Conversas</span>
+            <span class="metric-number">${summary.total_conversations}</span>
+          </div>
+          <div class="metric-card">
+            <span class="metric-label">Mensagens</span>
+            <span class="metric-number">${summary.total_messages}</span>
+          </div>
+          <div class="metric-card">
+            <span class="metric-label">Média msgs/conv</span>
+            <span class="metric-number">${summary.avg_messages_per_conv}</span>
+          </div>
+        </div>`;
+    }
+
+    function buildHeatmap(heatmapData) {
+      const DAYS  = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
+      const grid  = {};
+      let maxCount = 0;
+
+      for (const { dow, hour, count } of heatmapData) {
+        if (!grid[dow]) grid[dow] = {};
+        grid[dow][hour] = count;
+        if (count > maxCount) maxCount = count;
+      }
+
+      function intensity(count) {
+        if (!count || maxCount === 0) return 0;
+        const r = count / maxCount;
+        if (r < 0.25) return 1;
+        if (r < 0.5)  return 2;
+        if (r < 0.75) return 3;
+        return 4;
+      }
+
+      let html = '<div class="heatmap">';
+      html += '<div class="heatmap-corner"></div>';
+      for (let h = 0; h < 24; h++) {
+        html += `<div class="heatmap-hour-label">${h}</div>`;
+      }
+
+      for (let d = 0; d < 7; d++) {
+        html += `<div class="heatmap-day-label">${DAYS[d]}</div>`;
+        for (let h = 0; h < 24; h++) {
+          const count = (grid[d] && grid[d][h]) || 0;
+          const i = intensity(count);
+          html += `<div class="heatmap-cell" data-i="${i}" title="${DAYS[d]} ${h}h: ${count} msgs"></div>`;
+        }
+      }
+
+      html += '</div>';
+      return html;
+    }
+
     async function loadDashboard(from, to, selectedChannel) {
       const f = from || today();
-      const t = to || today();
-      const res = await fetch(`/api/stats/daily?from=${f}&to=${t}`);
-      const { channels: allChannels } = await res.json();
+      const t = to   || today();
+      const chParam = selectedChannel ? `&channel=${encodeURIComponent(selectedChannel)}` : "";
 
-      // Cards "hoje" — sempre mostram todos os canais
+      // Fetch all three data sources in parallel
+      const [statsRes, globalSummaryRes, filteredSummaryRes] = await Promise.all([
+        fetch(`/api/stats/daily?from=${f}&to=${t}`),
+        fetch(`/api/stats/summary?from=${f}&to=${t}`),
+        fetch(`/api/stats/summary?from=${f}&to=${t}${chParam}`)
+      ]);
+
+      const { channels: allChannels } = await statsRes.json();
+      const globalSummary             = await globalSummaryRes.json();
+      const filteredSummary           = await filteredSummaryRes.json();
+
+      // ── Today cards (always all channels) ──
       const todayCards = allChannels.map(ch => `
         <div class="today-card">
           <span class="today-card-label">${truncate(ch.name, 22)}</span>
@@ -97,7 +164,7 @@
         </div>
       `).join("");
 
-      // Filtro de canal — dropdown com "Todos" + cada canal
+      // ── Channel dropdown ──
       const channelOptions = [
         `<option value="">Todos os chats</option>`,
         ...allChannels.map(ch =>
@@ -105,7 +172,7 @@
         )
       ].join("");
 
-      // Aplica filtro de canal para as estatísticas por data
+      // ── Day bars (filtered by channel) ──
       const filtered = selectedChannel
         ? allChannels.filter(ch => ch.name === selectedChannel)
         : allChannels;
@@ -117,32 +184,53 @@
           allDays[d.date] = (allDays[d.date] || 0) + d.count;
         }
       }
-      const dayBars = Object.entries(allDays).sort(([a], [b]) => a.localeCompare(b)).map(([date, count]) => `
-        <div class="day-bar">
-          <span class="day-bar-count">${count}</span>
-          <span class="day-bar-date">${formatDateShort(date)}</span>
-        </div>
-      `).join("");
-
-      dashboard.innerHTML = `
-        <div class="dash-today">
-          <span class="dash-section-label">HOJE</span>
-          <div class="today-cards">${todayCards || '<span style="color:var(--muted);font-size:.9rem">Nenhuma conversa hoje.</span>'}</div>
-        </div>
-        <div class="dash-filter">
-          <span class="dash-section-label">FILTRO DE DATAS</span>
-          <div class="filter-controls">
-            <label>Chat <select id="filter-channel" class="filter-select">${channelOptions}</select></label>
-            <label>De <input type="date" id="filter-from" value="${f}" /></label>
-            <label>Até <input type="date" id="filter-to" value="${t}" /></label>
-            <button id="filter-apply" class="btn-filter">Filtrar</button>
+      const dayBars = Object.entries(allDays)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([date, count]) => `
+          <div class="day-bar">
+            <span class="day-bar-count">${count}</span>
+            <span class="day-bar-date">${formatDateShort(date)}</span>
           </div>
-          ${totalFilter > 0 ? `
-            <div class="filter-result">
-              <span class="filter-total">Total: <strong>${totalFilter}</strong></span>
-              <div class="day-bars">${dayBars}</div>
+        `).join("");
+
+      // ── Render ──
+      dashboard.innerHTML = `
+        <!-- Global panel: all channels, follows date filter -->
+        <div class="dash-global">
+          <span class="dash-section-label">PERÍODO SELECIONADO — TODOS OS CHATS</span>
+          ${buildMetricCards(globalSummary)}
+          <span class="dash-section-label">HORÁRIOS DE MAIOR ATIVIDADE</span>
+          <div class="heatmap-wrap">${buildHeatmap(globalSummary.heatmap)}</div>
+        </div>
+
+        <!-- Bottom row: today cards + filter panel -->
+        <div class="dash-row2">
+          <div class="dash-today">
+            <span class="dash-section-label">HOJE</span>
+            <div class="today-cards">${todayCards || '<span style="color:var(--muted);font-size:.9rem">Nenhuma conversa hoje.</span>'}</div>
+          </div>
+
+          <div class="dash-filter">
+            <span class="dash-section-label">FILTRO DE DATAS</span>
+            <div class="filter-controls">
+              <label>Chat <select id="filter-channel" class="filter-select">${channelOptions}</select></label>
+              <label>De <input type="date" id="filter-from" value="${f}" /></label>
+              <label>Até <input type="date" id="filter-to" value="${t}" /></label>
+              <button id="filter-apply" class="btn-filter">Filtrar</button>
             </div>
-          ` : '<div class="filter-empty">Nenhuma conversa no período.</div>'}
+
+            ${totalFilter > 0 ? `
+              <div class="filter-result">
+                <span class="filter-total">Total: <strong>${totalFilter}</strong></span>
+                <div class="day-bars">${dayBars}</div>
+              </div>
+            ` : '<div class="filter-empty">Nenhuma conversa no período.</div>'}
+
+            <div style="margin-top:16px">
+              <span class="dash-section-label">${selectedChannel ? truncate(selectedChannel, 30) : "TODOS OS CHATS"} — MÉTRICAS DO PERÍODO</span>
+              ${buildMetricCards(filteredSummary)}
+            </div>
+          </div>
         </div>
       `;
 
