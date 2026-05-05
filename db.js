@@ -121,7 +121,7 @@ async function getTodayStats() {
 }
 
 async function getSummaryStats(from, to, channel) {
-  const ch = channel || null;
+  const ch = channel ?? null;
 
   // Volume metrics: total conversations, messages, average
   const volRes = await pool.query(
@@ -153,12 +153,12 @@ async function getSummaryStats(from, to, channel) {
     [from, to, ch]
   );
 
-  const vol = volRes.rows[0];
+  const vol = volRes.rows[0] || { total_conversations: 0, total_messages: 0, avg_messages_per_conv: 0 };
   return {
     total_conversations: vol.total_conversations || 0,
     total_messages:      vol.total_messages      || 0,
     avg_messages_per_conv: Number(vol.avg_messages_per_conv) || 0,
-    heatmap: heatRes.rows   // [{ dow: 0-6, hour: 0-23, count: N }]
+    heatmap: heatRes.rows   // [{ dow: 0=Sun…6=Sat, hour: 0-23, count: N }]
   };
 }
 
