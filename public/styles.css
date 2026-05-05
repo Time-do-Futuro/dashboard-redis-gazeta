@@ -298,15 +298,30 @@ body {
 
 /* ── Dashboard ───────────────────────────────────── */
 .dashboard {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+/* The existing today + filter row keeps its 2-column grid */
+.dash-row2 {
   display: grid;
   grid-template-columns: auto 1fr;
   gap: 16px;
-  margin-bottom: 16px;
 }
 .dashboard.hidden { display: none; }
 
 .dash-today,
 .dash-filter {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  box-shadow: var(--shadow);
+}
+
+.dash-global {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -367,6 +382,85 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.06em;
 }
+
+/* ── Metric cards (volume numbers) ──────────────────── */
+.metric-cards {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+
+.metric-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: linear-gradient(145deg, var(--accent-light), #f5f3ff);
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  padding: 16px 24px;
+  min-width: 140px;
+  text-align: center;
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+.metric-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+
+.metric-label {
+  font-size: 0.74rem;
+  color: var(--muted);
+  margin-bottom: 6px;
+  font-weight: 500;
+}
+
+.metric-number {
+  font-size: 2.4rem;
+  font-weight: 800;
+  color: var(--accent);
+  line-height: 1;
+  letter-spacing: -0.04em;
+}
+
+/* ── Heatmap ─────────────────────────────────────────── */
+.heatmap-wrap {
+  overflow-x: auto;
+}
+
+.heatmap {
+  display: grid;
+  grid-template-columns: 36px repeat(24, minmax(20px, 1fr));
+  gap: 3px;
+  min-width: 560px;
+}
+
+.heatmap-hour-label,
+.heatmap-day-label {
+  font-size: 0.62rem;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.heatmap-corner { /* empty top-left cell */ }
+
+.heatmap-cell {
+  aspect-ratio: 1;
+  border-radius: 3px;
+  background: #ede9fe33;
+  cursor: default;
+  transition: transform 0.1s;
+}
+.heatmap-cell:hover { transform: scale(1.3); z-index: 1; }
+
+/* Intensity levels — 0 = empty, 4 = maximum */
+.heatmap-cell[data-i="0"] { background: rgba(109, 40, 217, 0.06); }
+.heatmap-cell[data-i="1"] { background: rgba(109, 40, 217, 0.20); }
+.heatmap-cell[data-i="2"] { background: rgba(109, 40, 217, 0.45); }
+.heatmap-cell[data-i="3"] { background: rgba(109, 40, 217, 0.70); }
+.heatmap-cell[data-i="4"] { background: rgba(109, 40, 217, 0.92); }
 
 /* Filtro */
 .filter-controls {
@@ -458,7 +552,9 @@ body {
 /* ── Responsivo ──────────────────────────────────── */
 @media (max-width: 700px) {
   .dashboard { grid-template-columns: 1fr; }
+  .dash-row2 { grid-template-columns: 1fr; }
   .today-cards { flex-wrap: wrap; }
+  .metric-cards { flex-wrap: wrap; }
   .bubble { max-width: 92%; }
   .app-header h1 { font-size: 0.86rem; }
   .chat { padding: 16px; }
