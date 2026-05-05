@@ -120,6 +120,48 @@ async function getTodayStats() {
   return result.rows;
 }
 
+async function getSummaryStats(from, to, channel) {
+  const ch = channel || null;
+
+  // Volume metrics: total conversations, messages, average
+  const volRes = await pool.query(
+    `SELECT
+       COUNT(DISTINCT c.id)::int                                         AS total_conversations,
+       COUNT(m.id)::int                                                  AS total_messages,
+       ROUND(COUNT(m.id)::numeric / NULLIF(COUNT(DISTINCT c.id), 0), 1) AS avg_messages_per_conv
+     FROM conversations c
+     LEFT JOIN messages m ON m.conversation_id = c.id
+     WHERE c.created_at >= $1::date
+       AND c.created_at <  $2::date + INTERVAL '1 day'
+       AND ($3::text IS NULL OR c.channel = $3)`,
+    [from, to, ch]
+  );
+
+  // Heatmap: message counts grouped by day-of-week and hour (Sao Paulo TZ)
+  const heatRes = await pool.query(
+    `SELECT
+       EXTRACT(DOW  FROM m.created_at AT TIME ZONE 'America/Sao_Paulo')::int AS dow,
+       EXTRACT(HOUR FROM m.created_at AT TIME ZONE 'America/Sao_Paulo')::int AS hour,
+       COUNT(*)::int AS count
+     FROM messages m
+     JOIN conversations c ON c.id = m.conversation_id
+     WHERE m.created_at >= $1::date
+       AND m.created_at <  $2::date + INTERVAL '1 day'
+       AND ($3::text IS NULL OR c.channel = $3)
+     GROUP BY dow, hour
+     ORDER BY dow, hour`,
+    [from, to, ch]
+  );
+
+  const vol = volRes.rows[0];
+  return {
+    total_conversations: vol.total_conversations || 0,
+    total_messages:      vol.total_messages      || 0,
+    avg_messages_per_conv: Number(vol.avg_messages_per_conv) || 0,
+    heatmap: heatRes.rows   // [{ dow: 0-6, hour: 0-23, count: N }]
+  };
+}
+
 module.exports = {
   pool,
   initDb,
@@ -129,5 +171,6 @@ module.exports = {
   getConversations,
   getMessages,
   getDailyStats,
-  getTodayStats
+  getTodayStats,
+  getSummaryStats
 };
