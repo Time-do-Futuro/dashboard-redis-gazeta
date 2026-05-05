@@ -5,7 +5,7 @@ const { URL } = require("url");
 const { createClient } = require("redis");
 const {
   initDb, getChannels, getConversations, getMessages,
-  getDailyStats, getTodayStats
+  getDailyStats, getTodayStats, getSummaryStats
 } = require("./db");
 const { syncKey, startCollector } = require("./collector");
 
@@ -125,6 +125,16 @@ async function handler(req, res) {
     }
 
     sendJson(res, 200, { channels: Object.values(channelMap) });
+    return;
+  }
+
+  if (url.pathname === "/api/stats/summary") {
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const from    = url.searchParams.get("from")    || todayStr;
+    const to      = url.searchParams.get("to")      || todayStr;
+    const channel = url.searchParams.get("channel") ?? null;
+    const summary = await getSummaryStats(from, to, channel);
+    sendJson(res, 200, summary);
     return;
   }
 
